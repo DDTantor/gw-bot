@@ -4,4 +4,4 @@ TODO
 .env
 temp
 sourcetemp
-log_table
+log_table.csv
