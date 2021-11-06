@@ -2,3 +2,6 @@ variables.py
 githubtoken
 TODO
 .env
+temp
+sourcetemp
+log_table

@@ -6,6 +6,7 @@ from discord.ext import commands
 from variables import *
 
 TOKEN = DISCORD_TOKEN
+log_discard_time = 3.0 
 
 def log_insert(log, db):
     try:
@@ -14,67 +15,22 @@ def log_insert(log, db):
         print("Error when getting log info, exception ", e)    
     try:
         with db.cursor() as cursor:
-            log_date, log_dur, log_class, success, boss_name = log_parser.get_log_insert_info(log_data) 
-            # Get boss_name_id
-            boss_name_id = database.get_name_id(db, "boss_name_table", "bossName", boss_name, cursor)
             
-            if float(log_dur) < 3.0 or database.is_duplicate(log_data, cursor):
+            # check if log already exists in db based on time
+            if float(log_dur) < log_discard_time or database.is_duplicate(log_data, cursor):
                 return 
-
-            # Enter the log into the log_table
-            sql = "INSERT INTO log_table (log, logDate, logDuration, logClass, success, bossNameID) VALUES ('%s', '%s', %s, %s, %s, %s)" \
-                   % (log, log_date, log_dur, log_class, success, boss_name_id) 
-
-            cursor.execute(sql)
-            log_id = cursor.lastrowid
             
-            cnt = 0;
-            sql = "INSERT INTO phase_table (logID, phaseNameID, startTime, endTime, phaseDuration) VALUES "
-            phase_list = [] 
-            starts = []
-            ends = []
-
-            # For each phase save the sql entry then insert all at once
-            for phase in log_data['phases']:
-                # Last variable here is to filter out last phases of a boss where it failed
-                if phase['breakbarPhase']:
-                    continue
-
-                phase_name, start, end, phase_dur = log_parser.get_phase_insert_info(phase, not success and phase == log_data['phases'][-1])
-                phase_name_id = database.get_name_id(db, "phase_name_table", "phaseName", phase_name, cursor)
-                phase_list.append("(%s, %s, %s, %s, %s)"  % (log_id, phase_name_id, start, end, phase_dur))
-                starts.append(start)
-                ends.append(end)
-
-
-            sql += ",".join(phase_list) + ";"
-            cursor.execute(sql)
-            phase_id_last = cursor.lastrowid
-            player_ids = []
-            class_ids = []
-
-            # For each player get the player and class ids
-            for j in range(len(log_data['players'])):
-                player_ids.append(database.get_name_id(db, "player_name_table", "playerName", log_data['players'][j]['acc'], cursor))
-                class_ids.append(database.get_name_id(db, "class_name_table", "className", log_data['players'][j]['profession'], cursor))
-
-            sql = "INSERT INTO dps_table (phaseID, playerNameID, classNameID, startDPS, endDPS, phaseDPS) VALUES "
-            dps_list = []
-
-            # For each player save the sql entry then insert all at once
-            for phase_id, start, end in zip(range(phase_id_last, phase_id_last + len(phase_list)), starts, ends):    
-                #phase_id = get_phase_id(db, phase_name_id, log_id, cursor)
-                for j in range(len(log_data['players'])):
-                    # j - num of player
-
-                    player_name, class_name, startDPS, endDPS, phaseDPS = log_parser.get_player_insert_info(log_data, j, start, end)
-                    player_name_id = player_ids[j]
-                    class_name_id  = class_ids[j]
-                    dps_list.append("(%s, %s, %s, %s, %s, %s)" % (phase_id, player_name_id, class_name_id, startDPS, endDPS, phaseDPS))
-
-
-            sql += ",".join(dps_list) + ";"
-            cursor.execute(sql)
+            log_date, log_dur, log_class, success, boss_name = log_parser.get_log_insert_info(log_data) 
+            
+            # Enter the log into the log_table and return log id
+            log_id = database.insert_log(log, log_date, log_dur, log_class, success, boss_name, cursor)
+ 
+            # Enter phases into the phase_table and return last_phase_id
+            last_phase_id, phase_count, starts, ends = database.insert_phases(log_data, log_id, success, cursor)
+            
+            # Enter players into the player_table
+            database.insert_players(log_data, last_phase_id, phase_count, starts, ends, cursor)
+            
 
     except Exception as e:
         print("Error when inserting log, exception ", e)
@@ -92,6 +48,7 @@ def log_dur(var, tp, dt, last_patch : bool, db):
         "a" : "Both"
         }
 
+    print(var)
     with db.cursor() as cursor:
         boss_name_id = database.get_exact_id("boss_name_table", "bossName", var[0], cursor)
         try:
@@ -121,6 +78,7 @@ def log_dur(var, tp, dt, last_patch : bool, db):
 
                 sql += "ORDER BY pt.%s LIMIT 20" % (d[var[1]])
 
+                print(sql)
                 cursor.execute(sql)
                 tmp = cursor.fetchall()
                 msg = "\n".join([" ".join([x['Log'], t[tp], var[1], var[2], str(x[d[var[1]]])]) for x in tmp])
@@ -243,7 +201,7 @@ class IV_Bot:
             #
             #
 
-            print(args)
+            print("ARGUMENTS FOR QUERY:", args)
             db = database.connect();
             var = [x.strip() for x in args[0].split(',')]
             try:
